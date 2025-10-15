@@ -69,8 +69,8 @@ with center:
     st.markdown("<div class='jedi-heading'>PDF JEDI</div>", unsafe_allow_html=True)
     question = st.text_input("Enter your question")
 
-    if question:
-        if st.button("Get Answer"):
+    if question and st.button("Get Answer"):
+        try:
             res = requests.get(f"{API_BASE}/ask", params={"q": question})
             if res.ok:
                 data = res.json()
@@ -82,29 +82,44 @@ with center:
                             st.markdown(f"**Chunk {i}:**\n{chunk}")
             else:
                 st.error("Failed to get answer. Try again.")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
     st.markdown("---")
-    if st.button("Upload PDFs"):
+
+    # === Toggle PDF Upload Section ===
+    show_upload = st.button("Upload your PDFs here Padawan!")
+
+    if show_upload:
         uploaded_files = st.file_uploader("Choose up to 2 PDFs", type=["pdf"], accept_multiple_files=True)
-        if uploaded_files and len(uploaded_files) <= 2:
-            files = [("files", (f.name, f, "application/pdf")) for f in uploaded_files]
-            res = requests.post(f"{API_BASE}/upload", files=files)
-            if res.ok:
-                st.success("PDFs uploaded and indexed successfully!")
+
+        if uploaded_files:
+            if len(uploaded_files) > 2:
+                st.warning("Please upload only up to 2 PDFs.")
             else:
-                st.error(res.json().get("detail", "Upload failed."))
-        elif uploaded_files and len(uploaded_files) > 2:
-            st.warning("Please upload only up to 2 PDFs.")
+                if st.button("Upload PDFs"):
+                    files = [("files", (f.name, f, "application/pdf")) for f in uploaded_files]
+                    try:
+                        res = requests.post(f"{API_BASE}/upload", files=files)
+                        if res.ok:
+                            st.success("PDFs uploaded and indexed successfully!")
+                        else:
+                            st.error(res.json().get("detail", "Upload failed."))
+                    except Exception as e:
+                        st.error(f"Upload failed: {e}")
 
 # === Right Column: View-only PDF List ===
 #with right:
-#    res = requests.get(f"{API_BASE}/list")
-#    if res.ok:
-#        pdfs = res.json().get("pdfs", [])
-#        if pdfs:
-#            st.markdown("### Uploaded PDFs")
-#            with st.expander("View All PDFs"):
-#                for pdf in pdfs:
-#                    st.markdown(f"- {pdf}")
-#    else:
-#        st.warning("Could not fetch PDF list.")
+#    try:
+#        res = requests.get(f"{API_BASE}/pdf/list")
+#        if res.ok:
+#            pdfs = res.json().get("pdfs", [])
+#            if pdfs:
+#                st.markdown("### Uploaded PDFs")
+#                with st.expander("View All PDFs"):
+#                    for pdf in pdfs:
+#                        st.markdown(f"- {pdf}")
+#        else:
+#            st.warning("Could not fetch PDF list.")
+#    except Exception as e:
+#        st.warning(f"Error fetching PDF list: {e}")
