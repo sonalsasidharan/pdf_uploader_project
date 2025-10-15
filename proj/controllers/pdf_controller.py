@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
-from pdf_service import save_and_process_pdfs, answer_question
+from pdf_service import save_and_process_pdfs, answer_question, list_available_pdfs
 from models.models import UploadResponse, AnswerResponse
 
 router = APIRouter()
@@ -11,5 +11,9 @@ async def upload_pdfs(files: list[UploadFile] = File(...)):
     return await save_and_process_pdfs(files)
 
 @router.get("/ask", response_model=AnswerResponse, tags=["QA"])
-def ask(q: str = Query(..., description="Your question")):
-    return answer_question(q)
+async def ask(q: str = Query(..., description="Your question")):
+    return await answer_question(q)
+
+@router.get("/pdf/list", tags=["PDF"])
+def list_pdfs():
+    return list_available_pdfs()
