@@ -9,35 +9,50 @@ from langchain_community.vectorstores import Neo4jVector
 from langchain.docstore.document import Document
 from dotenv import load_dotenv
 
-# === Load Environment Variables ===
+
 load_dotenv()
 hf_token = os.getenv("HF_API_KEY")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "Son@l98achu")
 
-# === Config ===
+
 NEO4J_URI = "bolt://127.0.0.1:7687"
 NEO4J_USER = "neo4j"
 PROJECT_NAME = "default"
 
-# === Embedding Model (Hugging Face) ===
+
 embed_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
-# === MongoDB Setup ===
+
 mongo_client = MongoClient("mongodb://127.0.0.1:27017")
 meta_db = mongo_client["pdf_metadata"]
 meta_collection = meta_db["uploads"]
 
-# === PDF Text Extraction ===
+
 def extract_text_from_pdf_bytes(file_bytes: bytes) -> str:
+    """
+    Extract text from PDF bytes using PyMuPDF.
+
+    Parameters:
+        file_bytes (bytes): The PDF file content as bytes.
+
+    Returns:
+        str: Extracted text concatenated from all pages.
+    """
     with fitz.open(stream=file_bytes, filetype="pdf") as doc:
         return "\n".join([page.get_text() for page in doc])
 
-# === Neo4j Driver ===
+
 def get_neo4j_driver():
+    """
+    Create and return a Neo4j driver instance.
+
+    Returns:
+        neo4j.GraphDatabase.driver: Neo4j driver configured with URI and authentication.
+    """
     return GraphDatabase.driver(NEO4J_URI, auth=basic_auth(NEO4J_USER, NEO4J_PASSWORD))
 
-# === Index Builder ===
-def build_index_from_bytes(file_bytes: bytes, filename: str, project_name: str = PROJECT_NAME):
+
+def build_index_from_bytes(file_bytes: bytes, filename: str, project_name: str = "default"):
     raw_text = extract_text_from_pdf_bytes(file_bytes)
     splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
     chunks = splitter.split_text(raw_text)[:10]
@@ -65,6 +80,7 @@ def build_index_from_bytes(file_bytes: bytes, filename: str, project_name: str =
 
     try:
         docs = [Document(page_content=chunk, metadata={"source": filename, "project": project_name}) for chunk in chunks]
+
         Neo4jVector.from_documents(
             documents=docs,
             embedding=embed_model,
@@ -79,8 +95,18 @@ def build_index_from_bytes(file_bytes: bytes, filename: str, project_name: str =
     except Exception as e:
         print(f"[Neo4j] Error storing embeddings: {e}")
 
-# === Graph Linking ===
+
 def _link_chunks_to_pdf_and_project(filename: str, project_name: str):
+    """
+    Link the indexed chunks in Neo4j to their corresponding PDF and project nodes.
+
+    Parameters:
+        filename (str): PDF filename whose chunks to link.
+        project_name (str): Project name of the PDF.
+
+    Returns:
+        None
+    """
     query = """
     MERGE (proj:Project {name: $project_name})
     MERGE (pdf:PDF {name: $filename})
@@ -93,8 +119,18 @@ def _link_chunks_to_pdf_and_project(filename: str, project_name: str):
     with get_neo4j_driver().session() as session:
         session.run(query, filename=filename, project_name=project_name)
 
-# === Chunk Retrieval ===
+
 def get_chunks_from_neo4j(pdf_name: str, project_name: str = PROJECT_NAME) -> list[str]:
+    """
+    Retrieve text chunks for a specific PDF in a given project from Neo4j.
+
+    Parameters:
+        pdf_name (str): Name of the PDF file.
+        project_name (str): Project name (default: 'default').
+
+    Returns:
+        list[str]: List of text chunks extracted from the PDF.
+    """
     query = """
     MATCH (chunk:Chunk)
     WHERE chunk.source = $pdf_name AND chunk.project = $project_name
@@ -105,8 +141,17 @@ def get_chunks_from_neo4j(pdf_name: str, project_name: str = PROJECT_NAME) -> li
         result = session.run(query, pdf_name=pdf_name, project_name=project_name)
         return [record["text"] for record in result]
 
-# === PDF Listing ===
+
 def get_available_pdfs(project_name: str = PROJECT_NAME) -> list[str]:
+    """
+    List all distinct PDF filenames indexed under a given project.
+
+    Parameters:
+        project_name (str): Project name to filter PDFs (default: 'default').
+
+    Returns:
+        list[str]: Sorted list of unique PDF filenames.
+    """
     query = """
     MATCH (chunk:Chunk)
     WHERE chunk.project = $project_name

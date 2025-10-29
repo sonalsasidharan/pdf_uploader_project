@@ -2,46 +2,69 @@ import os
 import re
 from fastapi import UploadFile
 from dotenv import load_dotenv
+
 from google import genai
-from langfuse import Langfuse
+
+from langfuse import get_client, Langfuse
+from langfuse.langchain import CallbackHandler
+from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import Neo4jVector
+
 from langchain.docstore.document import Document
 from langchain_community.embeddings import HuggingFaceEmbeddings
-
 from llama_index_pipeline.index_builder import (
     build_index_from_bytes,
     get_available_pdfs,
+    get_chunks_from_neo4j,
     embed_model
 )
 
-# === Load Environment Variables ===
 load_dotenv()
+os.environ["LANGFUSE_PUBLIC_KEY"] = os.getenv("LANGFUSE_PUBLIC_KEY")
+os.environ["LANGFUSE_SECRET_KEY"] = os.getenv("LANGFUSE_SECRET_KEY")
+os.environ["LANGFUSE_BASE_URL"] = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
-LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
-LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 
-# === Gemini Client Setup ===
+langfuse = get_client()
+assert langfuse.auth_check(), "Langfuse authentication failed."
+
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
-# === Langfuse Setup ===
-langfuse = Langfuse(
-    public_key=LANGFUSE_PUBLIC_KEY,
-    secret_key=LANGFUSE_SECRET_KEY,
-    host=LANGFUSE_HOST
-)
-
-# === Embedding Model ===
 embed_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
-# === PDF Upload ===
-async def save_and_process_pdfs(files: list[UploadFile]):
+
+async def save_and_process_pdfs(files: list[UploadFile], project_name: str):
+    """
+    Save and process uploaded PDFs under a specific project namespace.
+
+    Args:
+        files (list[UploadFile]): List of uploaded PDF files.
+        project_name (str): The unique project name to isolate PDFs.
+
+    Returns:
+        dict: Confirmation message.
+    """
     for file in files:
         file_bytes = await file.read()
-        build_index_from_bytes(file_bytes, filename=file.filename)
-    return {"message": "PDFs processed and indexed in Neo4j"}
+        build_index_from_bytes(file_bytes, filename=file.filename, project_name=project_name)
+    return {"message": f"PDFs processed and indexed under project: {project_name}"}
 
-# === Chunk Filter ===
+
+def get_chunks_for_pdf(pdf_name: str, project_name: str):
+    """
+    Get chunks for a PDF filtered by project name.
+
+    Args:
+        pdf_name (str): PDF file name.
+        project_name (str): Project namespace.
+
+    Returns:
+        dict: Text chunks.
+    """
+    chunks = get_chunks_from_neo4j(pdf_name, project_name=project_name)
+    return {"chunks": chunks}
+
+
 def filter_clean_chunks(chunks: list[str]) -> list[str]:
     clean = []
     for chunk in chunks:
@@ -50,43 +73,74 @@ def filter_clean_chunks(chunks: list[str]) -> list[str]:
             clean.append(chunk)
     return clean
 
-# === Question Answering ===
-async def answer_question(question: str):
-    vector_store = Neo4jVector(
-        embedding=embed_model,
-        url="bolt://127.0.0.1:7687",
-        username="neo4j",
-        password="Son@l98achu",
-        node_label="Chunk",
-        text_node_property="text",
-        embedding_node_property="embedding"
-    )
-    retriever = vector_store.as_retriever(search_kwargs={"k": 5})
-    docs = retriever.invoke(question)
 
-    if not docs:
-        return {"answer": "No relevant information found.", "pdf_name": "auto", "context_chunks": []}
+def count_tokens(client, model_name, text):
+    if not isinstance(text, str):
+        text = str(text)
+    content_obj = genai.types.Content(parts=[genai.types.Part(text=text)])
+    token_data = client.models.count_tokens(model=model_name, contents=content_obj)
+    return token_data.total_tokens
 
-    raw_chunks = [doc.page_content for doc in docs]
-    clean_chunks = filter_clean_chunks(raw_chunks)
-    context = "\n\n".join(clean_chunks)
-    source_pdfs = list({doc.metadata.get("source", "unknown") for doc in docs})
+
+async def answer_question(question: str, project_name: str, pdf_name: str | None = None):
+    """
+    Answer question scoped by project and optionally to a PDF.
+
+    Args:
+        question (str): User question.
+        project_name (str): Project namespace.
+        pdf_name (str | None): Optional PDF name filter.
+
+    Returns:
+        dict: Answer, sources, and token usage details.
+    """
+    langfuse_handler = CallbackHandler()
+    clean_chunks = []
+    context = ""
+    source_pdfs = []
+
+    if pdf_name:
+        raw_chunks = get_chunks_from_neo4j(pdf_name, project_name=project_name)
+        clean_chunks = filter_clean_chunks(raw_chunks)
+        context = "\n\n".join(clean_chunks)
+        source_pdfs = [pdf_name]
+    else:
+        vector_store = Neo4jVector(
+            embedding=embed_model,
+            url="bolt://127.0.0.1:7687",
+            username="neo4j",
+            password="Son@l98achu",
+            node_label="Chunk",
+            text_node_property="text",
+            embedding_node_property="embedding"
+        )
+        retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+        docs = retriever.invoke(question)
+
+        # Filter docs by project metadata
+        docs = [doc for doc in docs if doc.metadata.get('project') == project_name]
+        raw_chunks = [doc.page_content for doc in docs]
+        clean_chunks = filter_clean_chunks(raw_chunks)
+        context = "\n\n".join(clean_chunks)
+        source_pdfs = list({doc.metadata.get("source", "unknown") for doc in docs})
 
     if not clean_chunks:
         return {
             "answer": "No readable content found in the retrieved chunks.",
-            "pdf_name": ", ".join(source_pdfs),
+            "pdf_name": ", ".join(source_pdfs) if source_pdfs else "unknown",
             "context_chunks": []
         }
 
-    # === Load Langfuse Prompt ===
     try:
-        prompt_text = langfuse.get_prompt("pdf_qa_prompt",label="production")
-        formatted_prompt = prompt_text.compile(context=context, question=question)
-
+        lf_prompt = langfuse.get_prompt("pdf_qa_prompt", label="production")
+        template = PromptTemplate.from_template(
+            lf_prompt.get_langchain_prompt(),
+            metadata={"langfuse_prompt": lf_prompt}
+        )
     except Exception as e:
         print(f"[Langfuse] Error loading prompt: {e}")
-        prompt = f"""You are a helpful assistant. Use the following context to answer the question.
+        template = PromptTemplate.from_template(
+            """You are a helpful assistant. Use the following context to answer the question.
 
 Context:
 {context}
@@ -95,25 +149,70 @@ Question:
 {question}
 
 Answer:"""
+        )
 
-    # === Gemini Generation ===
     try:
+        compiled_prompt = template.invoke(
+            {"context": context, "question": question},
+            config={"callbacks": [langfuse_handler]}
+        )
+    except Exception as e:
+        print(f"[Langchain] Error compiling prompt: {e}")
+        compiled_prompt = template.format(context=context, question=question)
+
+    if not isinstance(compiled_prompt, str):
+        compiled_prompt = str(compiled_prompt)
+
+    try:
+        model_name = "gemini-2.5-flash"
+        prompt_tokens = count_tokens(client, model_name, compiled_prompt)
+
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[{"role": "user", "parts": [{"text": formatted_prompt}]}]
+            model=model_name,
+            contents=compiled_prompt
         )
         response_text = response.candidates[0].content.parts[0].text.strip()
+
+        if not isinstance(response_text, str):
+            response_text = str(response_text)
+
+        completion_tokens = count_tokens(client, model_name, response_text)
+
+        if hasattr(langfuse_handler, "update_current_trace"):
+            langfuse_handler.update_current_trace(
+                usage_details={
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens
+                },
+                metadata={"model": model_name}
+            )
+
     except Exception as e:
         print(f"[Gemini SDK] Error: {e}")
         response_text = "Sorry, I couldn't generate a response at the moment."
+        prompt_tokens = 0
+        completion_tokens = 0
 
     return {
         "answer": response_text,
         "pdf_name": ", ".join(source_pdfs),
         "num_chunks": len(clean_chunks),
-        "context_preview": clean_chunks[:2]
+        "context_preview": clean_chunks[:2],
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens
     }
 
-# === PDF Listing ===
-def list_available_pdfs():
-    return {"pdfs": get_available_pdfs()}
+
+def list_available_pdfs(project_name: str):
+    """
+    List PDFs available only for given project name.
+
+    Args:
+        project_name (str): Project namespace.
+
+    Returns:
+        dict: PDF filenames filtered by project.
+    """
+    return {"pdfs": get_available_pdfs(project_name=project_name)}

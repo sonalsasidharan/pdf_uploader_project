@@ -3,14 +3,22 @@ import requests
 
 API_BASE = "http://localhost:8000/pdf"
 
-# === Page Config ===
+# === Page Configuration ===
 st.set_page_config(page_title="PDF QA Assistant", layout="wide")
 
-# === Initialize Upload Toggle ===
+# === Initialize Session State ===
 if "show_upload" not in st.session_state:
     st.session_state.show_upload = False
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "project_name" not in st.session_state:
+    st.session_state.project_name = ""
+if "upload_success_message" not in st.session_state:
+    st.session_state.upload_success_message = ""
+if "question_text" not in st.session_state:
+    st.session_state.question_text = ""
 
-# === Inject StarJedi Special Edition Font and Banner ===
+
 def inject_star_wars_banner():
     st.markdown("""
         <link href="https://fonts.cdnfonts.com/css/starjedi-special-edition" rel="stylesheet">
@@ -32,7 +40,7 @@ def inject_star_wars_banner():
             text-shadow: none;
         }
         .vader-img {
-            width: 80px;
+            width: 40px;
             height: auto;
             filter: none;
         }
@@ -43,9 +51,10 @@ def inject_star_wars_banner():
         </div>
     """, unsafe_allow_html=True)
 
+
 inject_star_wars_banner()
 
-# === Custom Background ===
+
 def set_background(image_url):
     st.markdown(
         f"""
@@ -70,53 +79,112 @@ def set_background(image_url):
             color: white;
         }}
         .stButton > button {{
-            background-color: #00ffe5;
-            color: black;
+            background-color: transparent;
+            color: white;
             font-weight: bold;
+            border: 2px solid white;
             border-radius: 8px;
-            box-shadow: 0 0 10px #00ffe5;
+            padding: 0.5rem 1rem;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
             transition: 0.3s ease;
         }}
         .stButton > button:hover {{
-            background-color: black;
-            color: #00ffe5;
-            box-shadow: 0 0 20px #00ffe5;
+            background-color: rgba(255, 255, 255, 0.1);
+            color: white;
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+            border-color: white;
         }}
         </style>
         """,
         unsafe_allow_html=True
     )
 
+
 set_background("https://images.wallpapersden.com/image/download/darth-vader-4k_bGpnbGeUmZqaraWkpJRobWllrWdma2U.jpg")
 
-# === Layout Columns ===
+
 left, center, right = st.columns([1, 2, 1])
 
-# === Center Column: QA Input and Upload ===
 with center:
-    question = st.text_input("Enter your question")
+    st.markdown("### Your Jedi Chat")
 
-    if question and st.button("Get Answer"):
-        try:
-            res = requests.get(f"{API_BASE}/ask", params={"q": question})
-            if res.ok:
-                data = res.json()
-                st.markdown("#### Answer")
-                st.markdown(data["answer"])
-                if data.get("context_preview"):
-                    with st.expander("Context Preview"):
-                        for i, chunk in enumerate(data["context_preview"], 1):
-                            st.markdown(f"**Chunk {i}:**\n{chunk}")
-            else:
-                st.error("Failed to get answer. Try again.")
-        except Exception as e:
-            st.error(f"Error: {e}")
+    project_name = st.text_input(
+        "Enter your Project Name (new session starts with a new name)",
+        value=st.session_state.project_name,
+        help="Project name scopes your uploads and queries, isolating data."
+    )
+    if project_name.strip() != st.session_state.project_name:
+        st.session_state.project_name = project_name.strip()
+        st.session_state.chat_history = []
+        st.session_state.upload_success_message = ""
+
+    if not st.session_state.project_name:
+        st.warning("Please enter a Project Name.")
+        st.stop()
+
+    try:
+        res = requests.get(f"{API_BASE}/pdf/list", params={"project_name": st.session_state.project_name})
+        pdf_list = res.json().get("pdfs", []) if res.ok else []
+    except Exception as e:
+        st.error(f"Error fetching PDF list: {e}")
+        pdf_list = []
+
+    selected_pdf = st.selectbox("Select a PDF", pdf_list) if pdf_list else None
+
+    for msg in st.session_state.chat_history:
+        if msg["role"] == "user":
+            st.markdown(f"<div style='background:#222;padding:10px;text-align:right;color:#fff;border-radius:10px;margin-bottom:10px'><strong>You:</strong><br>{msg['content']}</div>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div style='background:#333;padding:10px;color:#0ff;border-radius:10px;margin-bottom:10px'><strong>Assistant:</strong><br>{msg['content']}</div>", unsafe_allow_html=True)
+            if msg.get("context"):
+                with st.expander("Context Preview"):
+                    for i, chunk in enumerate(msg["context"], 1):
+                        st.markdown(f"**Chunk {i}:**\n{chunk}")
 
     st.markdown("---")
 
-    # === Toggle PDF Upload Section ===
+    # Callback function for Enter key press
+    def on_enter():
+        question = st.session_state.question_text.strip()
+        if question:
+            st.session_state.chat_history.append({"role": "user", "content": question})
+            try:
+                params = {"q": question, "project_name": st.session_state.project_name}
+                if selected_pdf:
+                    params["pdf_name"] = selected_pdf
+                res = requests.get(f"{API_BASE}/ask", params=params)
+                if res.ok:
+                    data = res.json()
+                    st.session_state.chat_history.append({
+                        "role": "assistant",
+                        "content": data.get("answer", "No answer returned."),
+                        "context": data.get("context_preview", [])
+                    })
+                else:
+                    st.session_state.chat_history.append({
+                        "role": "assistant",
+                        "content": "Sorry, I couldn't generate a response at the moment."
+                    })
+            except Exception as e:
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": f"Error: {e}"
+                })
+            # Clear input after processing
+            st.session_state.question_text = ""
+
+    st.text_input(
+        "Enter your question",
+        key="question_text",
+        on_change=on_enter,
+        placeholder="Type your question and hit Enter"
+    )
+
+    st.markdown("---")
+
     if st.button("Upload your PDFs here, Padawan!"):
         st.session_state.show_upload = not st.session_state.show_upload
+        st.session_state.upload_success_message = ""
 
     if st.session_state.show_upload:
         uploaded_files = st.file_uploader("Choose up to 2 PDFs", type=["pdf"], accept_multiple_files=True)
@@ -128,10 +196,17 @@ with center:
                 if st.button("Upload PDFs", key="upload_button"):
                     files = [("files", (f.name, f, "application/pdf")) for f in uploaded_files]
                     try:
-                        res = requests.post(f"{API_BASE}/upload", files=files)
+                        res = requests.post(
+                            f"{API_BASE}/upload",
+                            params={"project_name": st.session_state.project_name},
+                            files=files
+                        )
                         if res.ok:
-                            st.success("PDFs uploaded and indexed successfully!")
+                            st.session_state.upload_success_message = "✅ PDFs uploaded and indexed successfully!"
                         else:
-                            st.error(res.json().get("detail", "Upload failed."))
+                            st.session_state.upload_success_message = "❌ Upload failed: " + res.json().get("detail", "Unknown error")
                     except Exception as e:
-                        st.error(f"Upload failed: {e}")
+                        st.session_state.upload_success_message = f"❌ Upload failed: {e}"
+
+        if st.session_state.upload_success_message:
+            st.markdown(f"<div style='margin-top:10px; color:#0f0; font-weight:bold'>{st.session_state.upload_success_message}</div>", unsafe_allow_html=True)
