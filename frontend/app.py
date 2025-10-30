@@ -3,10 +3,9 @@ import requests
 
 API_BASE = "http://localhost:8000/pdf"
 
-# === Streamlit Page Config ===
+
 st.set_page_config(page_title="PDF QA Assistant", layout="wide")
 
-# === Initialize Session State ===
 if "show_upload" not in st.session_state:
     st.session_state.show_upload = False
 if "chat_history" not in st.session_state:
@@ -20,7 +19,7 @@ if "question_text" not in st.session_state:
 if "is_uploading" not in st.session_state:
     st.session_state.is_uploading = False
 
-# ==== Harry Potter Banner ====
+
 def inject_harry_potter_banner():
     st.markdown("""
         <!-- Harry P font, a classic Harry Potter style font -->
@@ -70,7 +69,6 @@ def inject_harry_potter_banner():
 
 inject_harry_potter_banner()
 
-# ==== Background Style ====
 def set_background(image_url):
     st.markdown(
         f"""
@@ -117,7 +115,6 @@ def set_background(image_url):
 
 set_background("https://i.pinimg.com/1200x/45/25/cf/4525cfc2dc240372aba97f50528c9396.jpg")
 
-# ==== Spinner Overlay ====
 def show_upload_spinner(show):
     if show:
         st.markdown(
@@ -163,7 +160,7 @@ def show_upload_spinner(show):
     else:
         st.markdown("<div></div>", unsafe_allow_html=True)
 
-# ==== Content Layout ====
+
 left, center, right = st.columns([1, 2, 1])
 
 with center:

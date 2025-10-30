@@ -55,21 +55,3 @@ def list_pdfs(project_name: str = Query(..., description="Project namespace")):
         dict: Available PDFs.
     """
     return list_available_pdfs(project_name=project_name)
-
-
-@router.get("/pdf/chunks", tags=["PDF"])
-def get_pdf_chunks(
-    pdf_name: str = Query(..., description="PDF file name"),
-    project_name: str = Query(..., description="Project namespace")
-):
-    """
-    Get chunks for a given PDF under a specific project.
-
-    Args:
-        pdf_name (str): PDF file name.
-        project_name (str): Project namespace.
-
-    Returns:
-        dict: Text chunks list.
-    """
-    return get_chunks_for_pdf(pdf_name, project_name=project_name)
