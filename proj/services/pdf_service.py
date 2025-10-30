@@ -1,35 +1,27 @@
+from config import settings
+
 import os
 import re
 from fastapi import UploadFile
-from dotenv import load_dotenv
 
 from google import genai
-
 from langfuse import get_client, Langfuse
 from langfuse.langchain import CallbackHandler
 from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import Neo4jVector
-
 from langchain.docstore.document import Document
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from llama_index_pipeline.index_builder import (
     build_index_from_bytes,
     get_available_pdfs,
     get_chunks_from_neo4j,
-    embed_model
+    embed_model,
 )
-
-load_dotenv()
-os.environ["LANGFUSE_PUBLIC_KEY"] = os.getenv("LANGFUSE_PUBLIC_KEY")
-os.environ["LANGFUSE_SECRET_KEY"] = os.getenv("LANGFUSE_SECRET_KEY")
-os.environ["LANGFUSE_BASE_URL"] = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 langfuse = get_client()
 assert langfuse.auth_check(), "Langfuse authentication failed."
 
-client = genai.Client(api_key=GOOGLE_API_KEY)
-
+client = genai.Client(api_key=settings.GOOGLE_API_KEY)
 embed_model = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
 
@@ -37,12 +29,14 @@ async def save_and_process_pdfs(files: list[UploadFile], project_name: str):
     """
     Save and process uploaded PDFs under a specific project namespace.
 
+    Each file is read in its entirety and indexed into the vector database.
+
     Args:
         files (list[UploadFile]): List of uploaded PDF files.
-        project_name (str): The unique project name to isolate PDFs.
+        project_name (str): Unique project name for session isolation.
 
     Returns:
-        dict: Confirmation message.
+        dict: Confirmation message on successful processing.
     """
     for file in files:
         file_bytes = await file.read()
@@ -52,20 +46,31 @@ async def save_and_process_pdfs(files: list[UploadFile], project_name: str):
 
 def get_chunks_for_pdf(pdf_name: str, project_name: str):
     """
-    Get chunks for a PDF filtered by project name.
+    Retrieve chunks for a given PDF within a specific project.
 
     Args:
         pdf_name (str): PDF file name.
         project_name (str): Project namespace.
 
     Returns:
-        dict: Text chunks.
+        dict: Dictionary with list of extracted text chunks.
     """
     chunks = get_chunks_from_neo4j(pdf_name, project_name=project_name)
     return {"chunks": chunks}
 
 
 def filter_clean_chunks(chunks: list[str]) -> list[str]:
+    """
+    Clean and filter text chunks for minimum length/word requirements.
+
+    Removes non-printable characters and filters out short/non-informative chunks.
+
+    Args:
+        chunks (list[str]): List of text chunks to process.
+
+    Returns:
+        list[str]: Cleaned, filtered list of chunks.
+    """
     clean = []
     for chunk in chunks:
         chunk = re.sub(r"[^\x20-\x7E\n]", "", chunk)
@@ -75,6 +80,17 @@ def filter_clean_chunks(chunks: list[str]) -> list[str]:
 
 
 def count_tokens(client, model_name, text):
+    """
+    Count tokens for a given text prompt using the specified model.
+
+    Args:
+        client: Google Generative AI client instance.
+        model_name (str): Model name (e.g., 'gemini-2.5-flash').
+        text (str): Text for which to count tokens.
+
+    Returns:
+        int: Number of tokens in the text.
+    """
     if not isinstance(text, str):
         text = str(text)
     content_obj = genai.types.Content(parts=[genai.types.Part(text=text)])
@@ -84,15 +100,18 @@ def count_tokens(client, model_name, text):
 
 async def answer_question(question: str, project_name: str, pdf_name: str | None = None):
     """
-    Answer question scoped by project and optionally to a PDF.
+    Answer a user question by retrieving and using indexed PDF context.
+
+    Retrieves top-k relevant chunks from Neo4j vector store and passes them to a language model.
+    Also manages Langfuse tracing for prompt/response usage.
 
     Args:
-        question (str): User question.
-        project_name (str): Project namespace.
-        pdf_name (str | None): Optional PDF name filter.
+        question (str): User's question string.
+        project_name (str): Project namespace for isolation.
+        pdf_name (str|None): Optional PDF filename to restrict context source.
 
     Returns:
-        dict: Answer, sources, and token usage details.
+        dict: Answer, source PDF(s), chunk preview, and token usage.
     """
     langfuse_handler = CallbackHandler()
     clean_chunks = []
@@ -107,9 +126,9 @@ async def answer_question(question: str, project_name: str, pdf_name: str | None
     else:
         vector_store = Neo4jVector(
             embedding=embed_model,
-            url="bolt://127.0.0.1:7687",
-            username="neo4j",
-            password="Son@l98achu",
+            url=settings.NEO4J_URI,
+            username=settings.NEO4J_USER,
+            password=settings.NEO4J_PASSWORD,
             node_label="Chunk",
             text_node_property="text",
             embedding_node_property="embedding"
@@ -117,7 +136,6 @@ async def answer_question(question: str, project_name: str, pdf_name: str | None
         retriever = vector_store.as_retriever(search_kwargs={"k": 5})
         docs = retriever.invoke(question)
 
-        # Filter docs by project metadata
         docs = [doc for doc in docs if doc.metadata.get('project') == project_name]
         raw_chunks = [doc.page_content for doc in docs]
         clean_chunks = filter_clean_chunks(raw_chunks)
@@ -128,7 +146,7 @@ async def answer_question(question: str, project_name: str, pdf_name: str | None
         return {
             "answer": "No readable content found in the retrieved chunks.",
             "pdf_name": ", ".join(source_pdfs) if source_pdfs else "unknown",
-            "context_chunks": []
+            "context_chunks": [],
         }
 
     try:
@@ -137,8 +155,7 @@ async def answer_question(question: str, project_name: str, pdf_name: str | None
             lf_prompt.get_langchain_prompt(),
             metadata={"langfuse_prompt": lf_prompt}
         )
-    except Exception as e:
-        print(f"[Langfuse] Error loading prompt: {e}")
+    except Exception:
         template = PromptTemplate.from_template(
             """You are a helpful assistant. Use the following context to answer the question.
 
@@ -156,8 +173,7 @@ Answer:"""
             {"context": context, "question": question},
             config={"callbacks": [langfuse_handler]}
         )
-    except Exception as e:
-        print(f"[Langchain] Error compiling prompt: {e}")
+    except Exception:
         compiled_prompt = template.format(context=context, question=question)
 
     if not isinstance(compiled_prompt, str):
@@ -166,7 +182,6 @@ Answer:"""
     try:
         model_name = "gemini-2.5-flash"
         prompt_tokens = count_tokens(client, model_name, compiled_prompt)
-
         response = client.models.generate_content(
             model=model_name,
             contents=compiled_prompt
@@ -183,13 +198,12 @@ Answer:"""
                 usage_details={
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens
+                    "total_tokens": prompt_tokens + completion_tokens,
                 },
-                metadata={"model": model_name}
+                metadata={"model": model_name},
             )
 
-    except Exception as e:
-        print(f"[Gemini SDK] Error: {e}")
+    except Exception:
         response_text = "Sorry, I couldn't generate a response at the moment."
         prompt_tokens = 0
         completion_tokens = 0
@@ -201,18 +215,18 @@ Answer:"""
         "context_preview": clean_chunks[:2],
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens
+        "total_tokens": prompt_tokens + completion_tokens,
     }
 
 
 def list_available_pdfs(project_name: str):
     """
-    List PDFs available only for given project name.
+    List all PDFs indexed under the specified project name.
 
     Args:
-        project_name (str): Project namespace.
+        project_name (str): Project namespace for filtering.
 
     Returns:
-        dict: PDF filenames filtered by project.
+        dict: Dictionary with list of PDF filenames.
     """
     return {"pdfs": get_available_pdfs(project_name=project_name)}

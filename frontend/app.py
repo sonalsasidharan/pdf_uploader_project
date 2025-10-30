@@ -3,7 +3,7 @@ import requests
 
 API_BASE = "http://localhost:8000/pdf"
 
-# === Page Configuration ===
+# === Streamlit Page Config ===
 st.set_page_config(page_title="PDF QA Assistant", layout="wide")
 
 # === Initialize Session State ===
@@ -17,44 +17,60 @@ if "upload_success_message" not in st.session_state:
     st.session_state.upload_success_message = ""
 if "question_text" not in st.session_state:
     st.session_state.question_text = ""
+if "is_uploading" not in st.session_state:
+    st.session_state.is_uploading = False
 
-
-def inject_star_wars_banner():
+# ==== Harry Potter Banner ====
+def inject_harry_potter_banner():
     st.markdown("""
-        <link href="https://fonts.cdnfonts.com/css/starjedi-special-edition" rel="stylesheet">
+        <!-- Harry P font, a classic Harry Potter style font -->
+        <link href="https://fonts.cdnfonts.com/css/harry-p" rel="stylesheet">
         <style>
-        .jedi-banner {
+        .hp-banner {
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-end;
             gap: 20px;
-            margin-top: 30px;
+            margin-top: 60px;
         }
-        .star-wars-heading {
-            font-family: 'StarJedi Special Edition', sans-serif;
-            font-size: 60px;
-            color: #ffe81f;
-            background: none;
-            padding: 0;
+        .hp-heading {
+            font-family: 'Harry P', fantasy, serif !important;
+            font-size: 100px;
+            color: #ffd700;
+            letter-spacing: 2px;
             margin: 0;
-            text-shadow: none;
+            padding: 0;
+            background: none;
+            text-shadow: 2px 2px 15px #5f3b11;
+            line-height: 1.1;
+            display: flex;
+            align-items: flex-end;
         }
-        .vader-img {
-            width: 40px;
+        .hp-img {
+            width: 100px;
             height: auto;
-            filter: none;
+            margin-bottom: 4px;
+        }
+        .hp-scholar {
+            font-family: 'Harry P', fantasy, serif !important;
+            font-size: 36px;
+            color: #ffd700;
+            letter-spacing: 2px;
+            margin-bottom: 16px;
+            margin-top: 32px;
+            text-align: left;
+            text-shadow: 1px 1px 10px #412f09;
         }
         </style>
-        <div class='jedi-banner'>
-            <div class='star-wars-heading'>PDF wars</div>
-            <img class='vader-img' src='https://pngimg.com/uploads/darth_vader/darth_vader_PNG14.png' alt='Darth Vader'>
+        <div class='hp-banner'>
+            <div class='hp-heading'>WizVault</div>
+            <img class='hp-img' src='https://png.pngtree.com/png-vector/20240724/ourmid/pngtree-harry-potter-a-stack-of-books-png-image_12786717.png' alt='Harry Potter'>
         </div>
     """, unsafe_allow_html=True)
 
+inject_harry_potter_banner()
 
-inject_star_wars_banner()
-
-
+# ==== Background Style ====
 def set_background(image_url):
     st.markdown(
         f"""
@@ -99,17 +115,62 @@ def set_background(image_url):
         unsafe_allow_html=True
     )
 
+set_background("https://i.pinimg.com/1200x/45/25/cf/4525cfc2dc240372aba97f50528c9396.jpg")
 
-set_background("https://images.wallpapersden.com/image/download/darth-vader-4k_bGpnbGeUmZqaraWkpJRobWllrWdma2U.jpg")
+# ==== Spinner Overlay ====
+def show_upload_spinner(show):
+    if show:
+        st.markdown(
+            f"""
+            <style>
+            .overlay {{
+                position: fixed;
+                top: 0; left: 0;
+                width: 100vw; height: 100vh;
+                background: rgba(10, 10, 10, 0.6);
+                display: flex; justify-content: center; align-items: center;
+                z-index: 9999;
+            }}
+            .rotating-img {{
+                width: 220px; height: 220px;
+                animation: spin 1.2s linear infinite;
+                border-radius: 50%;
+                box-shadow: 0 0 24px 8px #d3ad74;
+                background: #221d14;
+                padding: 25px;
+            }}
+            @keyframes spin {{
+                0%   {{ transform: rotate(0deg); }}
+                100% {{ transform: rotate(360deg); }}
+            }}
+            .upload-text {{
+                text-align: center;
+                color: #ffd700;
+                font-size: 26px;
+                font-family: 'Harry P', fantasy, serif;
+                margin-top: 30px;
+                text-shadow: 1px 1px 10px #412f09;
+                line-height: 1.4;
+            }}
+            </style>
+            <div class="overlay">
+                <div>
+                    <img src="https://w7.pngwing.com/pngs/536/147/png-transparent-logo-harry-potter-and-the-cursed-child-hogwarts-james-potter-fictional-universe-of-harry-potter-harry-potter-logo-magic-witchcraft-thumbnail.png" class="rotating-img" alt="Sorting Hat">
+                    <div class="upload-text">Sorting your PDFs...<br>Don't move a muscle!</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.markdown("<div></div>", unsafe_allow_html=True)
 
-
+# ==== Content Layout ====
 left, center, right = st.columns([1, 2, 1])
 
 with center:
-    st.markdown("### Your Jedi Chat")
+    st.markdown("<div class='hp-scholar'>Hello Scholar</div>", unsafe_allow_html=True)
 
     project_name = st.text_input(
-        "Enter your Project Name (new session starts with a new name)",
+        "Enter your Project Name",
         value=st.session_state.project_name,
         help="Project name scopes your uploads and queries, isolating data."
     )
@@ -119,7 +180,6 @@ with center:
         st.session_state.upload_success_message = ""
 
     if not st.session_state.project_name:
-        st.warning("Please enter a Project Name.")
         st.stop()
 
     try:
@@ -143,7 +203,6 @@ with center:
 
     st.markdown("---")
 
-    # Callback function for Enter key press
     def on_enter():
         question = st.session_state.question_text.strip()
         if question:
@@ -170,7 +229,6 @@ with center:
                     "role": "assistant",
                     "content": f"Error: {e}"
                 })
-            # Clear input after processing
             st.session_state.question_text = ""
 
     st.text_input(
@@ -182,7 +240,7 @@ with center:
 
     st.markdown("---")
 
-    if st.button("Upload your PDFs here, Padawan!"):
+    if st.button("Upload your PDFs here!"):
         st.session_state.show_upload = not st.session_state.show_upload
         st.session_state.upload_success_message = ""
 
@@ -194,6 +252,8 @@ with center:
                 st.warning("Please upload only up to 2 PDFs.")
             else:
                 if st.button("Upload PDFs", key="upload_button"):
+                    st.session_state.is_uploading = True
+                    show_upload_spinner(True)
                     files = [("files", (f.name, f, "application/pdf")) for f in uploaded_files]
                     try:
                         res = requests.post(
@@ -204,9 +264,18 @@ with center:
                         if res.ok:
                             st.session_state.upload_success_message = "✅ PDFs uploaded and indexed successfully!"
                         else:
-                            st.session_state.upload_success_message = "❌ Upload failed: " + res.json().get("detail", "Unknown error")
+                            st.session_state.upload_success_message = (
+                                "❌ Upload failed: " + res.json().get("detail", "Unknown error")
+                            )
                     except Exception as e:
                         st.session_state.upload_success_message = f"❌ Upload failed: {e}"
+                    st.session_state.is_uploading = False
+                    st.rerun()
 
-        if st.session_state.upload_success_message:
-            st.markdown(f"<div style='margin-top:10px; color:#0f0; font-weight:bold'>{st.session_state.upload_success_message}</div>", unsafe_allow_html=True)
+        show_upload_spinner(st.session_state.is_uploading)
+
+        if st.session_state.upload_success_message and not st.session_state.is_uploading:
+            st.markdown(
+                f"<div style='margin-top:10px; color:#0f0; font-weight:bold'>{st.session_state.upload_success_message}</div>",
+                unsafe_allow_html=True
+            )

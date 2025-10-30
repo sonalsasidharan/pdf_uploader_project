@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
-from pdf_service import save_and_process_pdfs, answer_question, list_available_pdfs, get_chunks_for_pdf
+from services.pdf_service import save_and_process_pdfs, answer_question, list_available_pdfs, get_chunks_for_pdf
 from models.models import UploadResponse, AnswerResponse
 
 router = APIRouter()
