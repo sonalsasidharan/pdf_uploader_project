@@ -32,7 +32,7 @@ Streamlit UI (frontend) <-> FastAPI backend <-> MongoDB + Neo4j + Embeddings
 ## Installation & Setup
 
 ### 1. Clone repo
-git clone https://github.com/yourusername/wizvault.git
+git clone https://github.com/sonalsasidharan/wizvault.git
 cd wizvault
 
 ### 2. Create virtual environment
